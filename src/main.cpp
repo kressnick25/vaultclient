@@ -412,7 +412,7 @@ void vcMain_MainLoop(vcState *pProgramState)
         }
         else if (udStrEquali(pExt, ".udp"))
         {
-          vcProject_InitBlankScene(pProgramState);
+          vcProject_InitBlankScene(pProgramState, "UDP Import", 84);
 
           vcUDP_Load(pProgramState, pNextLoad);
         }
@@ -837,7 +837,7 @@ int main(int argc, char **args)
 
   programState.showWatermark = true;
 
-  vcProject_InitBlankScene(&programState);
+  vcProject_InitBlankScene(&programState, "Empty Project", vcPSZ_StandardGeoJSON);
 
   for (int i = 1; i < argc; ++i)
   {
@@ -1021,8 +1021,8 @@ void vcMain_ProfileMenu(vcState *pProgramState)
     udJSONArray *pProjectList = pProgramState->projects.Get("projects").AsArray();
     if (ImGui::BeginMenu(vcString::Get("menuProjects")))
     {
-      if (ImGui::MenuItem(vcString::Get("menuNewScene"), nullptr, nullptr) && vcProject_AbleToChange(pProgramState))
-        vcProject_InitBlankScene(pProgramState);
+      if (ImGui::MenuItem(vcString::Get("menuNewScene"), nullptr, nullptr))
+        vcModals_OpenModal(pProgramState, vcMT_NewProject);
 
       if (ImGui::MenuItem(vcString::Get("menuProjectExport"), nullptr, nullptr))
         vcModals_OpenModal(pProgramState, vcMT_ExportProject);
@@ -1038,7 +1038,7 @@ void vcMain_ProfileMenu(vcState *pProgramState)
         {
           if (ImGui::MenuItem(pProjectList->GetElement(i)->Get("name").AsString("<Unnamed>"), nullptr, nullptr) && vcProject_AbleToChange(pProgramState))
           {
-            vcProject_InitBlankScene(pProgramState);
+            vcProject_InitBlankScene(pProgramState, pProjectList->GetElement(i)->Get("name").AsString("<Unnamed>"), vcPSZ_StandardGeoJSON);
             bool moveTo = true;
 
             for (size_t j = 0; j < pProjectList->GetElement(i)->Get("models").ArrayLength(); ++j)

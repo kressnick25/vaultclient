@@ -8,7 +8,7 @@
 #include "udFile.h"
 #include "udStringUtil.h"
 
-void vcProject_InitBlankScene(vcState *pProgramState)
+void vcProject_InitBlankScene(vcState *pProgramState, const char *pName, int srid)
 {
   if (pProgramState->activeProject.pProject != nullptr)
     vcProject_Deinit(pProgramState, &pProgramState->activeProject);
@@ -22,10 +22,41 @@ void vcProject_InitBlankScene(vcState *pProgramState)
   pProgramState->sceneExplorer.selectedItems.clear();
   pProgramState->sceneExplorer.clickedItem = {};
 
-  vdkProject_CreateLocal(&pProgramState->activeProject.pProject, "New Project");
+  vdkProject_CreateLocal(&pProgramState->activeProject.pProject, pName);
   vdkProject_GetProjectRoot(pProgramState->activeProject.pProject, &pProgramState->activeProject.pRoot);
   pProgramState->activeProject.pFolder = new vcFolder(&pProgramState->activeProject, pProgramState->activeProject.pRoot, pProgramState);
   pProgramState->activeProject.pRoot->pUserData = pProgramState->activeProject.pFolder;
+
+  udGeoZone_SetFromSRID(&pProgramState->activeProject.baseZone, srid);
+
+  int cameraProjection = (srid == 84) ? 4978 : srid; // use ECEF if its default, otherwise the requested zone
+
+  if (cameraProjection != 0)
+  {
+    udGeoZone cameraZone = {};
+    udGeoZone_SetFromSRID(&cameraZone, cameraProjection);
+
+    if (vcGIS_ChangeSpace(&pProgramState->gis, cameraZone))
+      pProgramState->activeProject.pFolder->ChangeProjection(cameraZone);
+
+    // refresh map tiles when geozone changes
+    vcRender_ClearTiles(pProgramState->pRenderContext);
+
+    if (cameraProjection == 4978 || cameraZone.latLongBoundMin == cameraZone.latLongBoundMax)
+    {
+      udDouble3 randomLocation = udDouble3::create(0, 0, 1500000);
+      randomLocation.x = double(rand() & 0xFFFF) / 65535.f * 160.f - 80.0;
+      randomLocation.y = double(rand() & 0xFFFF) / 65535.f * 360.f - 180.0;
+
+      pProgramState->camera.position = udGeoZone_LatLongToCartesian(cameraZone, randomLocation);
+      pProgramState->camera.headingPitch = { 0.0, UD_DEG2RAD(-70.0) };
+    }
+    else
+    {
+      pProgramState->camera.position = udGeoZone_LatLongToCartesian(cameraZone, udDouble3::create((cameraZone.latLongBoundMin + cameraZone.latLongBoundMax) / 2.0, 10000.0));
+      pProgramState->camera.headingPitch = { 0.0, UD_DEG2RAD(-80.0) };
+    }
+  }
 }
 
 bool vcProject_ExtractCameraRecursive(vcState *pProgramState, vdkProjectNode *pParentNode)
@@ -106,8 +137,13 @@ bool vcProject_InitFromURI(vcState *pProgramState, const char *pFilename)
       temp.SetFilenameWithExt("");
       pProgramState->activeProject.pRelativeBase = udStrdup(temp.GetPath());
 
+      int32_t projectZone = 84; // LongLat
+      vdkProjectNode_GetMetadataInt(pProgramState->activeProject.pRoot, "projectcrs", &projectZone, 84);
+      if (udGeoZone_SetFromSRID(&pProgramState->activeProject.baseZone, projectZone) != udR_Success)
+        udGeoZone_SetFromSRID(&pProgramState->activeProject.baseZone, 84);
+
       int32_t recommendedSRID = -1;
-      if (vdkProjectNode_GetMetadataInt(pProgramState->activeProject.pRoot, "defaultcrs", &recommendedSRID, -1) == vE_Success && recommendedSRID >= 0 && udGeoZone_SetFromSRID(&zone, recommendedSRID) == udR_Success)
+      if (vdkProjectNode_GetMetadataInt(pProgramState->activeProject.pRoot, "defaultcrs", &recommendedSRID, pProgramState->activeProject.baseZone.srid == 0 ? -1 : 4978) == vE_Success && recommendedSRID >= 0 && udGeoZone_SetFromSRID(&zone, recommendedSRID) == udR_Success)
         vcGIS_ChangeSpace(&pProgramState->gis, zone);
 
       vcProject_ExtractCamera(pProgramState);
@@ -188,6 +224,9 @@ void vcProject_Save(vcState *pProgramState, const char *pPath, bool allowOverrid
 
   if (pProgramState->gis.isProjected)
     vdkProjectNode_SetMetadataInt(pProgramState->activeProject.pRoot, "defaultcrs", pProgramState->gis.SRID);
+
+  if (pProgramState->activeProject.baseZone.srid != 84)
+    vdkProjectNode_SetMetadataInt(pProgramState->activeProject.pRoot, "projectcrs", pProgramState->activeProject.baseZone.srid);
 
   if (vdkProject_WriteToMemory(pProgramState->activeProject.pProject, &pOutput) == vE_Success)
   {
@@ -396,13 +435,13 @@ bool vcProject_UpdateNodeGeometryFromCartesian(vcProject *pProject, vdkProjectNo
 
   vdkError result = vE_Failure;
 
-  if (zone.srid != 0) //Geolocated
+  if (zone.srid != 0 && pProject->baseZone.srid != 0) //Geolocated
   {
     pGeom = udAllocType(udDouble3, numPoints, udAF_Zero);
 
     // Change all points from the projection
     for (int i = 0; i < numPoints; ++i)
-      pGeom[i] = udGeoZone_CartesianToLatLong(zone, pPoints[i], true);
+      pGeom[i] = udGeoZone_TransformPoint(pPoints[i], zone, pProject->baseZone);
 
     result = vdkProjectNode_SetGeometry(pProject->pProject, pNode, newType, numPoints, (double*)pGeom);
     udFree(pGeom);
@@ -425,11 +464,11 @@ bool vcProject_FetchNodeGeometryAsCartesian(vcProject *pProject, vdkProjectNode 
   if (pNumPoints != nullptr)
     *pNumPoints = pNode->geomCount;
 
-  if (zone.srid != 0) // Geolocated
+  if (zone.srid != 0 && pProject->baseZone.srid != 0) // Geolocated
   {
     // Change all points from the projection
     for (int i = 0; i < pNode->geomCount; ++i)
-      pPoints[i] = udGeoZone_LatLongToCartesian(zone, ((udDouble3*)pNode->pCoordinates)[i], true);
+      pPoints[i] = udGeoZone_TransformPoint(((udDouble3*)pNode->pCoordinates)[i], pProject->baseZone, zone);
   }
   else
   {
