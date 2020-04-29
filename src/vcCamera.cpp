@@ -6,15 +6,24 @@
 #include "imgui.h"
 #include "imgui_ex/ImGuizmo.h"
 
+#if UDPLATFORM_ANDROID
+#include "vcSensor.h"
+#endif
 #define ONE_PIXEL_SQ 0.0001
 
 // higher == quicker smoothing
 static const double sCameraTranslationSmoothingSpeed = 22.0;
 static const double sCameraRotationSmoothingSpeed = 40.0;
 
-udDouble4x4 vcCamera_GetMatrix(vcCamera *pCamera)
+udDouble4x4 vcCamera_GetMatrix(vcCamera *pCamera, vcCameraInput *pCameraInput)
 {
+  // TODO add option to disable gyro input
+#if UDPLATFORM_ANDROID
+  // Bind camera orientation to gyroRotationVector
+  udQuaternion<double> orientation = udQuaternion<double>::create(pCameraInput->gyroInput);
+#else
   udQuaternion<double> orientation = udQuaternion<double>::create(pCamera->eulerRotation);
+#endif
   udDouble3 lookPos = pCamera->position + orientation.apply(udDouble3::create(0.0, 1.0, 0.0));
   return udDouble4x4::lookAt(pCamera->position, lookPos, orientation.apply(udDouble3::create(0.0, 0.0, 1.0)));
 }
@@ -100,7 +109,7 @@ void vcCamera_BeginCameraPivotModeMouseBinding(vcState *pProgramState, int bindi
   };
 }
 
-void vcCamera_UpdateMatrices(vcCamera *pCamera, const vcCameraSettings &settings, const udFloat2 &windowSize, const udFloat2 *pMousePos /*= nullptr*/)
+void vcCamera_UpdateMatrices(vcCamera *pCamera, const vcCameraSettings &settings, const udFloat2 &windowSize, const udFloat2 *pMousePos, vcCameraInput *pCameraInput)
 {
   // Update matrices
   double fov = settings.fieldOfView;
@@ -108,7 +117,7 @@ void vcCamera_UpdateMatrices(vcCamera *pCamera, const vcCameraSettings &settings
   double zNear = settings.nearPlane;
   double zFar = settings.farPlane;
 
-  pCamera->matrices.camera = vcCamera_GetMatrix(pCamera);
+  pCamera->matrices.camera = vcCamera_GetMatrix(pCamera, pCameraInput);
 
 #if GRAPHICS_API_OPENGL
   pCamera->matrices.projectionNear = udDouble4x4::perspectiveNO(fov, aspect, 0.5f, 10000.f);
@@ -344,7 +353,9 @@ void vcCamera_HandleSceneInput(vcState *pProgramState, udDouble3 oscMove, udFloa
 
   udDouble3 keyboardInput = udDouble3::zero();
   udDouble3 mouseInput = udDouble3::zero();
-
+#if UDPLATFORM_ANDROID
+  udDouble3 gyroInput = udDouble3::zero();
+#endif
   // bring in values
   keyboardInput += oscMove;
 
@@ -564,14 +575,27 @@ void vcCamera_HandleSceneInput(vcState *pProgramState, udDouble3 oscMove, udFloa
     pProgramState->cameraInput.inputState = vcCIS_None;
   }
 
+  // gyro input
+#if UDPLATFORM_ANDROID
+  // TODO move this so initialized once in program.
+  // or when gyro controls are enabled,
+  static RVector *pRVector = RVector::init();
+  RVector::update(pRVector);
+  gyroInput = pRVector->value;
+  //udFree(pRVector);
+#endif
+
   // Apply movement and rotation
   pProgramState->cameraInput.keyboardInput = keyboardInput;
   pProgramState->cameraInput.mouseInput = mouseInput;
+#if UDPLATFORM_ANDROID
+  pProgramState->cameraInput.gyroInput = gyroInput;
+#endif
 
   vcCamera_Apply(pProgramState, &pProgramState->camera, &pProgramState->settings.camera, &pProgramState->cameraInput, pProgramState->deltaTime, speedModifier);
 
   if (pProgramState->cameraInput.inputState == vcCIS_None)
     pProgramState->isUsingAnchorPoint = false;
 
-  vcCamera_UpdateMatrices(&pProgramState->camera, pProgramState->settings.camera, windowSize, &mousePos);
+  vcCamera_UpdateMatrices(&pProgramState->camera, pProgramState->settings.camera, windowSize, &mousePos, &pProgramState->cameraInput);
 }

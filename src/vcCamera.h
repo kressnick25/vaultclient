@@ -70,6 +70,7 @@ struct vcCameraInput
   udDouble3 keyboardInput;
   udDouble3 mouseInput;
   udDouble3 controllerDPADInput;
+  udDouble3 gyroInput;
 
   bool stabilize;
 
@@ -120,6 +121,6 @@ enum vcLensSizes
 // Applies movement to camera
 void vcCamera_HandleSceneInput(vcState *pProgramState, udDouble3 oscMove, udFloat2 windowSize, udFloat2 mousePos);
 
-void vcCamera_UpdateMatrices(vcCamera *pCamera, const vcCameraSettings &settings, const udFloat2 &windowSize, const udFloat2 *pMousePos = nullptr);
+void vcCamera_UpdateMatrices(vcCamera *pCamera, const vcCameraSettings &settings, const udFloat2 &windowSize, const udFloat2 *pMousePos = nullptr, vcCameraInput *pCameraInput=NULL);
 
 #endif//vcCamera_h__
